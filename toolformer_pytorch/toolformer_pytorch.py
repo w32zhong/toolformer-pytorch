@@ -20,7 +20,7 @@ from beartype import beartype
 from beartype.typing import Callable, Optional, Union, List, Tuple
 
 from tqdm import tqdm
-from x_clip.tokenizer import tokenizer
+#from x_clip.tokenizer import tokenizer
 
 pad_sequence = partial(pad_sequence, batch_first = True)
 
@@ -290,7 +290,7 @@ def sample(
     # start iterating
 
     for iteration in tqdm(range(remain_iterations)):
-        logits = model(output)
+        logits = model(output).logits
         last_logits = logits[batch_indices, position_indices]
 
         # this will ensure that each batch token sequence will have at most one <api> token
@@ -547,6 +547,7 @@ class PromptDataset(Dataset):
         self.data = data
         self.prompt = prompt
         self.prompt_input_tag_regex = re.escape(prompt_input_tag)
+        self.tokenizer_encode = tokenizer_encode
 
     def __len__(self):
         return len(self.data)
@@ -554,7 +555,7 @@ class PromptDataset(Dataset):
     def __getitem__(self, idx):
         data_string = self.data[idx]
         data_with_prompt = re.sub(self.prompt_input_tag_regex, data_string, self.prompt)
-        token_ids = tokenizer.encode(data_with_prompt)
+        token_ids = self.tokenizer_encode(data_with_prompt)
         return torch.tensor(token_ids).long(), torch.tensor(len(token_ids)).long()
 
 def prompt_collate_fn(data, padding_value = 0):
@@ -592,7 +593,7 @@ class Toolformer(nn.Module):
         *,
         tool_id: str,
         tool: Callable,
-        api_start_str = ' [',
+        api_start_str = '[',
         api_stop_str = ']',
         api_response_delimiter = '→',
         api_start_id = None,
@@ -602,8 +603,8 @@ class Toolformer(nn.Module):
         pad_id = 0,
         prompt_batch_size = 4,
         model_seq_len = 2048,
-        tokenizer_encode: Callable = tokenizer.encode,
-        tokenizer_decode: Callable = tokenizer.decode,
+        tokenizer_encode: Callable = None,
+        tokenizer_decode: Callable = None,
         post_prompt_callback: Callable = identity,
         prompt_input_tag: str = DEFAULT_PROMPT_INPUT_TAG,
         exclude_filters: dict[str, Callable[[str], bool]] = dict(),
@@ -849,7 +850,7 @@ class Toolformer(nn.Module):
             for batch in dl:
                 inp, labels = batch[:, :-1], batch[:, 1:]
 
-                logits = self.model(inp)
+                logits = self.model(inp).logits
                 logits = rearrange(logits, 'b n c -> b c n')
 
                 loss = F.cross_entropy(logits, labels, ignore_index = self.pad_id)
@@ -869,27 +870,20 @@ class Toolformer(nn.Module):
         return_after_filtering_api_calls = False,
         return_after_filtering_by_api_response = False
     ):
+        print('0')
         data_with_api_calls = self.generate_data_with_api_calls(data)
 
-        if return_after_generating_api_calls:
-            return data_with_api_calls
-
+        print('a')
         filtered_data, filtered_data_with_api_calls = self.filter_and_keep_only_first_api_call(data, data_with_api_calls)
-
-        if return_after_filtering_api_calls:
-            return filtered_data, filtered_data_with_api_calls
+        print('b')
 
         assert len(filtered_data_with_api_calls) > 0, 'your model failed to follow instructions and make API calls. please try a better model or do some better prompt engineering'
 
         data_with_responses = self.make_api_calls(filtered_data_with_api_calls)
-
-        if return_after_making_api_calls:
-            return filtered_data, filtered_data_with_api_calls, data_with_responses
+        print('c')
 
         filtered_results = self.filter_by_api_responses(filtered_data, filtered_data_with_api_calls, data_with_responses)
-
-        if return_after_filtering_by_api_response:
-            return filtered_results
+        print('d')
 
         if self.should_finetune:
             assert filtered_results.num_passed > 0, f'none of the sequences with API calls passed the filtering criteria with threshold {self.filter_threshold}'
